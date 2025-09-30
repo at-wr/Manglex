@@ -1,0 +1,21 @@
+[package]
+name = "sudachi-ios"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+sudachi = { path = "../sudachi" }
+libc = "0.2"
+serde_json = "1.0"
+memmap2 = "0.9"
+
+[lib]
+name = "sudachi_ios"
+crate-type = ["staticlib"]
+
+[profile.release]
+opt-level = "z"          # Optimize for size
+lto = true               # Link-time optimization
+codegen-units = 1        # Better optimization
+strip = true             # Strip symbols
+panic = "abort"          # Smaller binary

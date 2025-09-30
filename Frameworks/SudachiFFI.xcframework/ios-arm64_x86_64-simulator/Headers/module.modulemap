@@ -1,0 +1,4 @@
+module SudachiFFI {
+    header "sudachi_ios.h"
+    export *
+}

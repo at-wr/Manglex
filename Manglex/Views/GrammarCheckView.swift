@@ -15,6 +15,15 @@ extension Array {
 
 struct GrammarCheckView: View {
     let selectedText: String
+    
+    var body: some View {
+        MorphologyBreakdownView(selectedText: selectedText)
+    }
+}
+
+// Legacy view - kept for compatibility
+struct LegacyGrammarCheckView: View {
+    let selectedText: String
     @Environment(\.dismiss) private var dismiss
     @StateObject private var analyzer = JMDictAnalyzer.shared
     @State private var analysisResult: [WordAnalysis] = []
@@ -196,7 +205,7 @@ struct WordDescriptionRow: View {
                     .padding(.top, 6)
                 
                 VStack(alignment: .leading, spacing: 4) {
-                    // Word line: romanization + surface + reading
+                    // Word line: romanization + surface + reading + conjugation
                     HStack(spacing: 8) {
                         Text(word.romanized)
                             .font(.system(size: 14, weight: .medium, design: .monospaced))
@@ -208,6 +217,16 @@ struct WordDescriptionRow: View {
                         } else {
                             Text(word.surface)
                                 .font(.system(size: 14, weight: .medium))
+                        }
+                        
+                        // Show conjugation indicator if word is conjugated
+                        if let dictForm = word.dictionaryForm, dictForm != word.surface {
+                            Image(systemName: "arrow.triangle.branch")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                            Text(dictForm)
+                                .font(.caption)
+                                .foregroundColor(.secondary)
                         }
                         
                         Spacer()

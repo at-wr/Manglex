@@ -22,8 +22,20 @@ struct WordAnalysis {
     let confidence: Double
     let entryId: Int
     
+    // Enhanced Sudachi morphological data
+    let dictionaryForm: String?          // Base/dictionary form (e.g., 食べる for 食べた)
+    let normalizedForm: String?          // Normalized form
+    let sudachiPOS: [String]?            // Sudachi's detailed POS tags
+    let conjugationType: String?          // Conjugation type (e.g., 五段, 一段)
+    let conjugationForm: String?          // Conjugation form (e.g., 過去形, 連体形)
+    let wordBegin: Int?                   // Start position in original text
+    let wordEnd: Int?                     // End position in original text
+    
     init(surface: String, reading: String, romanized: String, definitions: [Definition], 
-         partOfSpeech: [String], isCommon: Bool, confidence: Double = 1.0, entryId: Int = 0) {
+         partOfSpeech: [String], isCommon: Bool, confidence: Double = 1.0, entryId: Int = 0,
+         dictionaryForm: String? = nil, normalizedForm: String? = nil,
+         sudachiPOS: [String]? = nil, conjugationType: String? = nil,
+         conjugationForm: String? = nil, wordBegin: Int? = nil, wordEnd: Int? = nil) {
         self.surface = surface
         self.reading = reading
         self.romanized = romanized
@@ -33,10 +45,42 @@ struct WordAnalysis {
         self.confidence = confidence
         self.entryId = entryId
         
-        // Enhanced POS detection with better categorization
-        if let firstPOS = partOfSpeech.first {
+        // Sudachi morphological data
+        self.dictionaryForm = dictionaryForm
+        self.normalizedForm = normalizedForm
+        self.sudachiPOS = sudachiPOS
+        self.conjugationType = conjugationType
+        self.conjugationForm = conjugationForm
+        self.wordBegin = wordBegin
+        self.wordEnd = wordEnd
+        
+        // Enhanced POS detection with Sudachi support
+        let posToCheck = sudachiPOS?.first ?? partOfSpeech.first
+        if let firstPOS = posToCheck {
             let pos = firstPOS.lowercased()
             switch pos {
+            case let x where x.contains("名詞"):
+                self.primaryPOS = "noun"
+            case let x where x.contains("動詞"):
+                self.primaryPOS = "verb"
+            case let x where x.contains("形容詞"):
+                self.primaryPOS = "adjective"
+            case let x where x.contains("副詞"):
+                self.primaryPOS = "adverb"
+            case let x where x.contains("助詞"):
+                self.primaryPOS = "particle"
+            case let x where x.contains("助動詞"):
+                self.primaryPOS = "auxiliary"
+            case let x where x.contains("接頭"):
+                self.primaryPOS = "prefix"
+            case let x where x.contains("接尾"):
+                self.primaryPOS = "suffix"
+            case let x where x.contains("感動詞"):
+                self.primaryPOS = "interjection"
+            case let x where x.contains("連体詞"):
+                self.primaryPOS = "adnominal"
+            case let x where x.contains("接続詞"):
+                self.primaryPOS = "conjunction"
             case let x where x.contains("noun"):
                 self.primaryPOS = "noun"
             case let x where x.contains("verb") && !x.contains("auxiliary"):
@@ -65,6 +109,36 @@ struct WordAnalysis {
         } else {
             self.primaryPOS = "unknown"
         }
+    }
+    
+    // Computed property to check if this word is conjugated
+    var isConjugated: Bool {
+        return dictionaryForm != nil && dictionaryForm != surface
+    }
+    
+    // Computed property to get display text (shows conjugation if available)
+    var displayText: String {
+        if let dictForm = dictionaryForm, dictForm != surface {
+            return "\(surface) ← \(dictForm)"
+        }
+        return surface
+    }
+    
+    // Get prioritized definitions (common/preferred first)
+    var prioritizedDefinitions: [Definition] {
+        return definitions.sorted { def1, def2 in
+            // Prioritize by sense order (lower is more important)
+            if def1.senseOrder != def2.senseOrder {
+                return def1.senseOrder < def2.senseOrder
+            }
+            // Then by gloss order within same sense
+            return def1.glossOrder < def2.glossOrder
+        }
+    }
+    
+    // Get the most relevant/preferred definition
+    var preferredDefinition: Definition? {
+        return prioritizedDefinitions.first
     }
 }
 
@@ -102,6 +176,7 @@ class JMDictAnalyzer: ObservableObject {
     
     // MARK: - Published Properties
     @Published var isReady = false
+    @Published var sudachiReady = false
     
     // MARK: - Private Properties  
     private var db: OpaquePointer?
@@ -111,6 +186,9 @@ class JMDictAnalyzer: ObservableObject {
     private var entryCache: [String: DatabaseEntry] = [:]
     private var cacheLoaded = false
     private var dbPath: String?
+    
+    // Sudachi tokenizer for morphological analysis
+    private let sudachiTokenizer = SudachiTokenizer()
     
     // Enhanced logging
     private let logger = Logger(subsystem: "RecManga", category: "JMDictAnalyzer")
@@ -129,15 +207,17 @@ class JMDictAnalyzer: ObservableObject {
         logger.info("Starting dictionary initialization...")
         
         initializationTask = Task {
-            let success = await withTaskGroup(of: Bool.self) { group in
-                group.addTask { await self.initializeDatabase() }
-                return await group.first(where: { $0 == true }) ?? false
-            }
+            async let dbSuccess = initializeDatabase()
+            async let sudachiSuccess = initializeSudachi()
+            
+            let (dbReady, sudachiIsReady) = await (dbSuccess, sudachiSuccess)
             
             await MainActor.run {
-                if success {
+                self.sudachiReady = sudachiIsReady
+                
+                if dbReady {
                     self.isReady = true
-                    self.logger.info("Dictionary initialization completed successfully")
+                    self.logger.info("Dictionary initialization completed successfully (Sudachi: \(sudachiIsReady ? "ready" : "unavailable"))")
                     
                     // Load caches on main actor to avoid threading issues
                     Task {
@@ -149,6 +229,17 @@ class JMDictAnalyzer: ObservableObject {
                 }
                 self.isInitializing = false
             }
+        }
+    }
+    
+    private func initializeSudachi() async -> Bool {
+        do {
+            try await sudachiTokenizer.initializeWithBundledDictionary()
+            logger.info("Sudachi tokenizer initialized successfully")
+            return true
+        } catch {
+            logger.error("Failed to initialize Sudachi: \(error.localizedDescription)")
+            return false
         }
     }
     
@@ -261,9 +352,133 @@ class JMDictAnalyzer: ObservableObject {
             return [] 
         }
         
+        // Use Sudachi for morphological tokenization if available
+        if sudachiReady {
+            logger.info("Using Sudachi tokenizer for analysis")
+            return await analyzeWithSudachi(cleanedText, db: db)
+        } else {
+            // Fallback to legacy segmentation
+            logger.info("Sudachi unavailable, using legacy segmentation")
+            return await analyzeWithLegacySegmentation(cleanedText, db: db)
+        }
+    }
+    
+    // MARK: - Sudachi-based Analysis
+    
+    private func analyzeWithSudachi(_ text: String, db: OpaquePointer) async -> [WordAnalysis] {
+        do {
+            // Tokenize with Sudachi (Long mode for coarser segmentation, better for dictionary lookup)
+            let tokens = try await sudachiTokenizer.tokenize(text, mode: .long)
+            logger.info("Sudachi tokenized into \(tokens.count) morphemes")
+            
+            var results: [WordAnalysis] = []
+            
+            for token in tokens {
+                // Skip punctuation marks and symbols
+                if isPunctuationToken(token) {
+                    logger.debug("Skipping punctuation token: '\(token.surface)'")
+                    continue
+                }
+                
+                // Try looking up the dictionary form first for better matches
+                let lookupWord = token.dictionaryForm ?? token.surface
+                
+                if let analysis = await lookupWordEnhanced(lookupWord, in: db) {
+                    // Enhance with Sudachi morphological data
+                    let enhancedAnalysis = enhanceWithSudachi(analysis: analysis, token: token)
+                    results.append(enhancedAnalysis)
+                } else if let surfaceAnalysis = await lookupWordEnhanced(token.surface, in: db) {
+                    // Try surface form if dictionary form didn't work
+                    let enhancedAnalysis = enhanceWithSudachi(analysis: surfaceAnalysis, token: token)
+                    results.append(enhancedAnalysis)
+                } else {
+                    // Create morphologically-aware unknown word analysis
+                    results.append(createSudachiUnknownWordAnalysis(token))
+                }
+            }
+            
+            logger.info("Sudachi analysis complete: \(results.count) words analyzed")
+            return results
+        } catch {
+            logger.error("Sudachi tokenization failed: \(error.localizedDescription). Falling back to legacy")
+            return await analyzeWithLegacySegmentation(text, db: db)
+        }
+    }
+    
+    private func isPunctuationToken(_ token: SudachiToken) -> Bool {
+        // Check if token is punctuation based on POS tags
+        if let firstPOS = token.partOfSpeech.first {
+            // Sudachi marks punctuation as "補助記号" (auxiliary symbol)
+            if firstPOS.contains("補助記号") || firstPOS.contains("空白") {
+                return true
+            }
+        }
+        
+        // Also check the actual surface form
+        let punctuationChars = CharacterSet(charactersIn: "。、！？!?…・「」『』（）()[]【】〈〉《》〔〕{}～ー")
+        return token.surface.unicodeScalars.allSatisfy { punctuationChars.contains($0) }
+    }
+    
+    private func enhanceWithSudachi(analysis: WordAnalysis, token: SudachiToken) -> WordAnalysis {
+        // Extract conjugation info from Sudachi POS tags
+        let (conjType, conjForm) = extractConjugationInfo(from: token.partOfSpeech)
+        
+        return WordAnalysis(
+            surface: token.surface,
+            reading: token.reading ?? analysis.reading,
+            romanized: analysis.romanized,
+            definitions: analysis.definitions,
+            partOfSpeech: analysis.partOfSpeech,
+            isCommon: analysis.isCommon,
+            confidence: analysis.confidence,
+            entryId: analysis.entryId,
+            dictionaryForm: token.dictionaryForm,
+            normalizedForm: token.normalizedForm,
+            sudachiPOS: token.partOfSpeech,
+            conjugationType: conjType,
+            conjugationForm: conjForm,
+            wordBegin: token.beginOffset,
+            wordEnd: token.endOffset
+        )
+    }
+    
+    private func createSudachiUnknownWordAnalysis(_ token: SudachiToken) -> WordAnalysis {
+        let (conjType, conjForm) = extractConjugationInfo(from: token.partOfSpeech)
+        
+        return WordAnalysis(
+            surface: token.surface,
+            reading: token.reading ?? token.surface,
+            romanized: RomajiConverter.toRomaji(token.reading ?? token.surface),
+            definitions: [],
+            partOfSpeech: [],
+            isCommon: false,
+            confidence: 0.3,
+            dictionaryForm: token.dictionaryForm,
+            normalizedForm: token.normalizedForm,
+            sudachiPOS: token.partOfSpeech,
+            conjugationType: conjType,
+            conjugationForm: conjForm,
+            wordBegin: token.beginOffset,
+            wordEnd: token.endOffset
+        )
+    }
+    
+    private func extractConjugationInfo(from pos: [String]) -> (type: String?, form: String?) {
+        // Sudachi POS format: [品詞大分類, 品詞中分類, 品詞小分類, 品詞細分類, 活用型, 活用形]
+        guard pos.count >= 6 else { return (nil, nil) }
+        
+        let conjType = pos[4] != "*" ? pos[4] : nil
+        let conjForm = pos[5] != "*" ? pos[5] : nil
+        
+        return (conjType, conjForm)
+    }
+    
+    // MARK: - Legacy Segmentation (Fallback)
+    
+    private func analyzeWithLegacySegmentation(_ text: String, db: OpaquePointer) async -> [WordAnalysis] {
         // Use forward maximum matching for segmentation
-        let segments = segmentText(cleanedText)
-        logger.info("Segmented into \(segments.count) segments")
+        let segments = segmentText(text)
+        logger.info("Legacy segmented into \(segments.count) segments")
         
         var results: [WordAnalysis] = []
         
@@ -276,7 +491,7 @@ class JMDictAnalyzer: ObservableObject {
             }
         }
         
-        logger.info("Analysis complete: \(results.count) words analyzed")
+        logger.info("Legacy analysis complete: \(results.count) words analyzed")
         return results
     }
     
@@ -295,7 +510,7 @@ class JMDictAnalyzer: ObservableObject {
         return WordAnalysis(
             surface: word,
             reading: word,
-            romanized: romanizeHiragana(word),
+            romanized: RomajiConverter.toRomaji(word),
             definitions: [],
             partOfSpeech: [],
             isCommon: false,
@@ -651,7 +866,7 @@ class JMDictAnalyzer: ObservableObject {
         return WordAnalysis(
             surface: displaySurface,
             reading: reading,
-            romanized: romanizeHiragana(reading),
+            romanized: RomajiConverter.toRomaji(reading),
             definitions: entry.definitions,
             partOfSpeech: entry.partOfSpeech,
             isCommon: entry.isCommon,

@@ -275,7 +275,7 @@ struct JMDictWordView: View {
     let onWordTap: (WordAnalysis) -> Void
     
     var body: some View {
-        FlowLayout(spacing: 4) {
+        LegacyFlowLayout(spacing: 4) {
             ForEach(words.indices, id: \.self) { index in
                 let word = words[index]
                 VStack(spacing: 4) {
@@ -434,7 +434,7 @@ struct JMDictWordDetailView: View {
                     .padding(.vertical, 20)
                     
                     // Word Information card
-                    if !word.partOfSpeech.isEmpty || word.isCommon {
+                    if !word.partOfSpeech.isEmpty || word.isCommon || word.dictionaryForm != nil {
                         VStack(alignment: .leading, spacing: 16) {
                             AnalysisCard(
                                 title: "Word Information",
@@ -442,7 +442,44 @@ struct JMDictWordDetailView: View {
                                 borderColor: Color.green.opacity(0.3)
                             ) {
                                 VStack(alignment: .leading, spacing: 12) {
-                                    if !word.partOfSpeech.isEmpty {
+                                    // Conjugation/Dictionary Form (if available)
+                                    if let dictForm = word.dictionaryForm, dictForm != word.surface {
+                                        InfoRow(
+                                            icon: "arrow.triangle.branch",
+                                            title: "Dictionary Form",
+                                            value: dictForm,
+                                            color: .green
+                                        )
+                                    }
+                                    
+                                    // Conjugation details (Sudachi)
+                                    if let conjType = word.conjugationType {
+                                        InfoRow(
+                                            icon: "text.word.spacing",
+                                            title: "Conjugation Type",
+                                            value: conjType,
+                                            color: .teal
+                                        )
+                                    }
+                                    
+                                    if let conjForm = word.conjugationForm {
+                                        InfoRow(
+                                            icon: "text.append",
+                                            title: "Conjugation Form",
+                                            value: conjForm,
+                                            color: .cyan
+                                        )
+                                    }
+                                    
+                                    // Part of Speech
+                                    if let sudachiPOS = word.sudachiPOS, !sudachiPOS.isEmpty {
+                                        InfoRow(
+                                            icon: "text.badge.checkmark",
+                                            title: "Part of Speech (Sudachi)",
+                                            value: sudachiPOS.prefix(3).joined(separator: " / "),
+                                            color: .blue
+                                        )
+                                    } else if !word.partOfSpeech.isEmpty {
                                         InfoRow(
                                             icon: "text.badge.checkmark",
                                             title: "Part of Speech",
@@ -720,35 +757,8 @@ struct JMDictWordDetailView: View {
     }
 }
 
-struct InfoRow: View {
-    let icon: String
-    let title: String
-    let value: String
-    let color: Color
-    
-    var body: some View {
-        HStack(spacing: 12) {
-            Image(systemName: icon)
-                .foregroundColor(color)
-                .frame(width: 20)
-            
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title)
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                Text(value)
-                    .font(.body)
-                    .fontWeight(.medium)
-            }
-            
-            Spacer()
-        }
-        .padding(.vertical, 4)
-    }
-}
-
 // Flow layout to arrange tokens naturally like text
-struct FlowLayout: Layout {
+struct LegacyFlowLayout: Layout {
     var spacing: CGFloat = 8
     
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
